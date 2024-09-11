@@ -1101,6 +1101,18 @@ function AUTODNSSEC(d) {
         'WARNING: AUTODNSSEC is deprecated. It is now a no-op.  Please use AUTODNSSEC_ON or AUTODNSSEC_OFF. The default is to make no modifications. This message will disappear in a future release.'
     );
 }
+function REGISTER_DNSKEY_OFF(d) {
+    d.register_dnskey = 0;
+}
+function REGISTER_DNSKEY_CDNSKEY(d) {
+    d.register_dnskey = 1;
+}
+function REGISTER_DNSKEY_ALL(d) {
+    d.register_dnskey = 2;
+}
+function REGISTER_DNSKEY_KSK_ONLY(d) {
+    d.register_dnskey = 3;
+}
 
 /**
  * @deprecated

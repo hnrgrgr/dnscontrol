@@ -232,6 +232,9 @@ func nativeToRecord(r *Record, origin string) (*models.RecordConfig, error) {
 }
 
 func (c *ovhProvider) GetRegistrarCorrections(dc *models.DomainConfig) ([]*models.Correction, error) {
+
+	corrections := []*models.Correction{}
+
 	// get the actual in-use nameservers
 	actualNs, err := c.fetchRegistrarNS(dc.Name)
 	if err != nil {
@@ -252,8 +255,8 @@ func (c *ovhProvider) GetRegistrarCorrections(dc *models.DomainConfig) ([]*model
 
 	// check if we need to change something
 	if actual != expected {
-		return []*models.Correction{
-			{
+		corrections = append(corrections,
+			&models.Correction{
 				Msg: fmt.Sprintf("Change Nameservers from '%s' to '%s'", actual, expected),
 				F: func() error {
 					err := c.updateNS(dc.Name, expectedNs)
@@ -262,9 +265,72 @@ func (c *ovhProvider) GetRegistrarCorrections(dc *models.DomainConfig) ([]*model
 					}
 					return nil
 				},
-			},
-		}, nil
+			})
 	}
 
-	return nil, nil
+	actualGlue, err := c.fetchGlueRecords(dc.Name)
+	if err != nil {
+		return nil, err
+	}
+	glueInstructions, err := diff2.GlueByRecord(actualGlue, dc)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, inst := range glueInstructions {
+		key := inst.Key
+		newIps := []string{}
+		for _, ip := range inst.New {
+			newIps = append(newIps, ip.String())
+		}
+		switch inst.Type {
+		case diff2.REPORT:
+			corrections = append(corrections, &models.Correction{Msg: inst.Msg})
+		case diff2.CREATE:
+			corrections = append(corrections,
+				&models.Correction{
+					Msg: inst.Msg,
+					F: func() error {
+						return c.addGlue(dc.Name, key, newIps)
+					},
+				})
+		case diff2.CHANGE:
+			corrections = append(corrections,
+				&models.Correction{
+					Msg: inst.Msg,
+					F: func() error {
+						return c.updateGlue(dc.Name, key, newIps)
+					},
+				})
+		case diff2.DELETE:
+			corrections = append(corrections,
+				&models.Correction{
+					Msg: inst.Msg,
+					F: func() error {
+						return c.deleteGlue(dc.Name, key)
+					},
+				})
+		default:
+			panic(fmt.Sprintf("unhandled inst.Type %s", inst.Type))
+		}
+	}
+
+	if dc.RegisterDNSKEY != models.None {
+		actualDnskeys, err := c.fetchDSRecords(dc.Name)
+		if err != nil {
+			return nil, err
+		}
+		dsInstructions, dnskeys := diff2.ByDnskey(actualDnskeys, dc)
+		if len(dsInstructions) > 0 {
+			corrections = append(corrections,
+				&models.Correction{
+					Msg: dsInstructions.JustMsg(),
+					F: func() error {
+						return c.updateDSRecords(dc.Name, dnskeys)
+					},
+				})
+		}
+	}
+
+	return corrections, nil
 }

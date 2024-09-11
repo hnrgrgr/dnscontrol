@@ -38,7 +38,7 @@ var features = providers.DocumentationNotes{
 	// The default for unlisted capabilities is 'Cannot'.
 	// See providers/capabilities.go for the entire list of capabilities.
 	providers.CanAutoDNSSEC:          providers.Can("Just warn when DNSSEC is requested but no RRSIG is found in the AXFR or warn when DNSSEC is not requested but RRSIG are found in the AXFR."),
-	providers.CanConcur:              providers.Can(),
+	providers.CanConcur:              providers.Cannot(),
 	providers.CanUseCAA:              providers.Can(),
 	providers.CanUseDHCID:            providers.Can(),
 	providers.CanUseDNAME:            providers.Can(),
@@ -303,9 +303,6 @@ func (c *axfrddnsProvider) GetZoneRecords(domain string, meta map[string]string)
 	for _, rr := range rawRecords {
 		switch rr.Header().Rrtype {
 		case dns.TypeRRSIG,
-			dns.TypeDNSKEY,
-			dns.TypeCDNSKEY,
-			dns.TypeCDS,
 			dns.TypeNSEC,
 			dns.TypeNSEC3,
 			dns.TypeNSEC3PARAM,
@@ -341,18 +338,6 @@ func (c *axfrddnsProvider) GetZoneRecords(domain string, meta map[string]string)
 
 	if foundDNSSecRecords != nil {
 		foundRecords = append(foundRecords, foundDNSSecRecords)
-	}
-
-	c.hasDnssecRecords = false
-	if len(foundRecords) >= 1 {
-		last := foundRecords[len(foundRecords)-1]
-		if last.Type == "TXT" &&
-			last.Name == dnssecDummyLabel &&
-			last.GetTargetTXTSegmentCount() == 1 &&
-			last.GetTargetTXTSegmented()[0] == dnssecDummyTxt {
-			c.hasDnssecRecords = true
-			foundRecords = foundRecords[0:(len(foundRecords) - 1)]
-		}
 	}
 
 	return foundRecords, nil
@@ -420,11 +405,22 @@ func (c *axfrddnsProvider) GetZoneRecordsCorrections(dc *models.DomainConfig, fo
 		foundRecords = foundRecords[1:]
 	}
 
+	hasDnssecRecords := false
+	if len(foundRecords) >= 1 {
+		last := foundRecords[len(foundRecords)-1]
+		if last.Type == "TXT" &&
+			last.Name == dnssecDummyLabel &&
+			last.GetTargetTXTJoined() == dnssecDummyTxt {
+			hasDnssecRecords = true
+			foundRecords = foundRecords[0:(len(foundRecords) - 1)]
+		}
+	}
+
 	// TODO(tlim): This check should be done on all providers. Move to the global validation code.
-	if dc.AutoDNSSEC == "on" && !c.hasDnssecRecords {
+	if dc.AutoDNSSEC == "on" && !hasDnssecRecords {
 		printer.Printf("Warning: AUTODNSSEC is enabled, but no DNSKEY or RRSIG record was found in the AXFR answer!\n")
 	}
-	if dc.AutoDNSSEC == "off" && c.hasDnssecRecords {
+	if dc.AutoDNSSEC == "off" && hasDnssecRecords {
 		printer.Printf("Warning: AUTODNSSEC is disabled, but DNSKEY or RRSIG records were found in the AXFR answer!\n")
 	}
 

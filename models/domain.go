@@ -16,6 +16,15 @@ const (
 	DomainTag = "dnscontrol_tag"
 )
 
+type RegisterDNSKEY int
+
+const (
+	None RegisterDNSKEY = iota
+	RegisterCDNSKEY
+	RegisterDNSKEY_ALL
+	RegisterDNSKEY_KSK
+)
+
 // DomainConfig describes a DNS domain (technically a DNS zone).
 type DomainConfig struct {
 	Name             string         `json:"name"` // NO trailing "."
@@ -37,6 +46,9 @@ type DomainConfig struct {
 
 	AutoDNSSEC string `json:"auto_dnssec,omitempty"` // "", "on", "off"
 	// DNSSEC        bool              `json:"dnssec,omitempty"`
+	RegisterDNSKEY    RegisterDNSKEY `json:"register_dnskey,omitempty"`
+	CollectedDnskeys  Dnskeys        `json:"dnskeys,omitempty"`
+	CollectedCDnskeys Dnskeys        `json:"cdnskeys,omitempty"`
 
 	// These fields contain instantiated provider instances once everything is linked up.
 	// This linking is in two phases:
@@ -138,7 +150,7 @@ func (dc *DomainConfig) Punycode() error {
 			if err := rec.SetTarget(rec.GetTargetField()); err != nil {
 				return err
 			}
-		case "A", "AAAA", "CAA", "DHCID", "DNSKEY", "DS", "HTTPS", "LOC", "NAPTR", "SOA", "SSHFP", "SVCB", "TXT", "TLSA", "AZURE_ALIAS":
+		case "A", "AAAA", "CAA", "CDS", "DHCID", "DNSKEY", "DS", "HTTPS", "LOC", "NAPTR", "SOA", "SSHFP", "SVCB", "TXT", "TLSA", "AZURE_ALIAS":
 			// Nothing to do.
 		default:
 			return fmt.Errorf("Punycode rtype %v unimplemented", rec.Type)
@@ -219,4 +231,13 @@ func (dc *DomainConfig) GetPopulateCorrections(providerName string) []*Correctio
 	dc.pendingCorrectionsMutex.Lock()
 	defer dc.pendingCorrectionsMutex.Unlock()
 	return dc.pendingPopulateCorrections[providerName]
+}
+
+func (dc *DomainConfig) IsANameserver(host string) bool {
+	for _, ns := range dc.Nameservers {
+		if ns.Name == host {
+			return true
+		}
+	}
+	return false
 }

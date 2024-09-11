@@ -3,6 +3,7 @@ package ovh
 import (
 	"errors"
 	"fmt"
+	"net"
 
 	"github.com/StackExchange/dnscontrol/v4/models"
 	"github.com/miekg/dns/dnsutil"
@@ -262,6 +263,39 @@ func (c *ovhProvider) fetchRegistrarNS(fqdn string) ([]string, error) {
 	return nameServers, nil
 }
 
+type GlueRecord struct {
+	Host string   `json:"host,omitempty"`
+	IPs  []string `json:"ips,omitempty"`
+}
+
+func (c *ovhProvider) fetchGlueRecords(fqdn string) (models.GlueRecords, error) {
+	var hosts []string
+	err := c.client.CallAPI("GET", "/domain/"+fqdn+"/glueRecord", nil, &hosts, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var glueRecords models.GlueRecords
+	for _, host := range hosts {
+		var record GlueRecord
+		err = c.client.CallAPI("GET", fmt.Sprintf("/domain/%s/glueRecord/%s", fqdn, host), nil, &record, true)
+		if err != nil {
+			return nil, err
+		}
+		ips := []net.IP{}
+		for _, sIp := range record.IPs {
+			ip := net.ParseIP(sIp)
+			if ip == nil || (ip.To4() == nil && ip.To16() == nil) {
+				return nil, fmt.Errorf("invalid IP in glue record: %s", sIp)
+			}
+			ips = append(ips, ip)
+		}
+		glueRecords = append(glueRecords, &models.GlueRecord{Host: record.Host, IPs: ips})
+	}
+
+	return glueRecords, nil
+}
+
 // DomainNS describes a domain's NS in ovh's protocol.
 type DomainNS struct {
 	Host string `json:"host,omitempty"`
@@ -329,6 +363,143 @@ func (c *ovhProvider) updateNS(fqdn string, ns []string) error {
 	// in OVH is usually executed a few minutes after they have been registered.
 	// We count on the fact that `GetNameservers` uses the registrar API to get
 	// a coherent view (including pending modifications) of the registered NS.
+
+	return nil
+}
+
+func (c *ovhProvider) deleteGlue(fqdn, host string) error {
+
+	// fmt.Printf("DELETE /domain/%s/glueRecord/%s", fqdn, host)
+	// return nil
+
+	var task Task
+	err := c.client.CallAPI("DELETE", fmt.Sprintf("/domain/%s/glueRecord/%s", fqdn, host), nil, &task, true)
+	if err != nil {
+		return err
+	}
+
+	if task.Status == "error" {
+		return fmt.Errorf("API error while deleting glue for %s: %s", fqdn, task.Comment)
+	}
+
+	return nil
+}
+
+type UpdateGlueRecord struct {
+	IPs []string `json:"ips,omitempty"`
+}
+
+func (c *ovhProvider) updateGlue(fqdn string, host string, ips []string) error {
+
+	// // fmt.Printf("POST /domain/%s/glueRecord/%s/update (%s)", fqdn, host, strings.Join(ips, ","))
+	// return nil
+
+	var task Task
+	record := UpdateGlueRecord{
+		IPs: ips,
+	}
+	err := c.client.CallAPI("POST", fmt.Sprintf("/domain/%s/glueRecord/%s/update", fqdn, host), &record, &task, true)
+	if err != nil {
+		return err
+	}
+
+	if task.Status == "error" {
+		return fmt.Errorf("API error while updating glue for %s: %s", fqdn, task.Comment)
+	}
+
+	return nil
+}
+
+func (c *ovhProvider) addGlue(fqdn string, host string, ips []string) error {
+	var task Task
+	record := GlueRecord{
+		Host: host,
+		IPs:  ips,
+	}
+	err := c.client.CallAPI("POST", fmt.Sprintf("/domain/%s/glueRecord", fqdn), &record, &task, true)
+	if err != nil {
+		return err
+	}
+
+	if task.Status == "error" {
+		return fmt.Errorf("API error while adding glue for %s: %s", fqdn, task.Comment)
+	}
+
+	return nil
+}
+
+type DSRecord struct {
+	Algorithm uint8  `json:"algorithm,omitempty"`
+	Flags     uint16 `json:"flags,omitempty"`
+	Id        int    `json:"id,omitempty"`
+	PublicKey string `json:"publicKey,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Tag       uint16 `json:"tag,omitempty"`
+}
+
+func (c *ovhProvider) fetchDSRecords(fqdn string) (models.Dnskeys, error) {
+	var ids []int
+	err := c.client.CallAPI("GET", "/domain/"+fqdn+"/dsRecord", nil, &ids, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var dnskeys models.Dnskeys
+	for _, id := range ids {
+		var record DSRecord
+		err = c.client.CallAPI("GET", fmt.Sprintf("/domain/%s/dsRecord/%d", fqdn, id), nil, &record, true)
+		if err != nil {
+			return nil, err
+		}
+
+		dnskeys = append(dnskeys, models.Dnskey{
+			Tag:       record.Tag,
+			Flags:     record.Flags,
+			Algorithm: record.Algorithm,
+			PublicKey: record.PublicKey,
+			Original:  record,
+		})
+	}
+
+	return dnskeys, nil
+}
+
+type UpdateDSRecord struct {
+	Algorithm uint8  `json:"algorithm"`
+	Flags     uint16 `json:"flags"`
+	PublicKey string `json:"publicKey"`
+	Tag       uint16 `json:"tag"`
+}
+
+type UpdateDSRecords struct {
+	Keys []UpdateDSRecord `json:"keys"`
+}
+
+func (c *ovhProvider) updateDSRecords(fqdn string, records models.Dnskeys) error {
+
+	var task Task
+
+	keys := []UpdateDSRecord{}
+	for _, r := range records {
+		keys = append(keys, UpdateDSRecord{
+			Algorithm: r.Algorithm,
+			Flags:     r.Flags,
+			PublicKey: r.PublicKey,
+			Tag:       r.Tag,
+		})
+	}
+	update := UpdateDSRecords{
+		Keys: keys,
+	}
+
+	err := c.client.CallAPI("POST", fmt.Sprintf("/domain/%s/dsRecord", fqdn), &update, &task, true)
+	if err != nil {
+		return err
+	}
+
+	if task.Status == "error" {
+		return fmt.Errorf("API error while updating DS records for %s: %s", fqdn, task.Comment)
+	}
 
 	return nil
 }

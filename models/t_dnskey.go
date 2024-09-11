@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/base64"
 	"strconv"
 	"strings"
 
@@ -17,8 +18,8 @@ func (rc *RecordConfig) SetTargetDNSKEY(flags uint16, protocol, algorithm uint8,
 	if rc.Type == "" {
 		rc.Type = "DNSKEY"
 	}
-	if rc.Type != "DNSKEY" {
-		panic("assertion failed: SetTargetDNSKEY called when .Type is not DNSKEY")
+	if rc.Type != "DNSKEY" && rc.Type != "CDNSKEY" {
+		panic("assertion failed: SetTargetDNSKEY called when .Type is not DNSKEY nor CNDSKEY")
 	}
 
 	return nil
@@ -37,6 +38,10 @@ func (rc *RecordConfig) SetTargetDNSKEYStrings(flags, protocol, algorithm, publi
 	u8algorithm, err := strconv.ParseUint(algorithm, 10, 8)
 	if err != nil {
 		return errors.Wrap(err, "DNSKEY Algorithm can't fit in 8 bits")
+	}
+	_, err = base64.StdEncoding.DecodeString(publicKey)
+	if err != nil {
+		return errors.Wrap(err, "DNSKEY Public key is not a valid base64 string")
 	}
 
 	return rc.SetTargetDNSKEY(uint16(u16flags), uint8(u8protocol), uint8(u8algorithm), publicKey)

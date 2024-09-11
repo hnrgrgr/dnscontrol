@@ -17,8 +17,8 @@ func (rc *RecordConfig) SetTargetDS(keytag uint16, algorithm, digesttype uint8, 
 	if rc.Type == "" {
 		rc.Type = "DS"
 	}
-	if rc.Type != "DS" {
-		panic("assertion failed: SetTargetDS called when .Type is not DS")
+	if rc.Type != "DS" && rc.Type != "CDS" {
+		panic("assertion failed: SetTargetDS called when .Type is not DS nor CDS")
 	}
 
 	return nil

@@ -114,9 +114,9 @@ func (rc *RecordConfig) GetTargetDebug() string {
 		content += " type=" + rc.AzureAlias["type"]
 	case "CAA":
 		content += fmt.Sprintf(" caatag=%s caaflag=%d", rc.CaaTag, rc.CaaFlag)
-	case "DS":
+	case "CDS", "DS":
 		content += fmt.Sprintf(" ds_algorithm=%d ds_keytag=%d ds_digesttype=%d ds_digest=%s", rc.DsAlgorithm, rc.DsKeyTag, rc.DsDigestType, rc.DsDigest)
-	case "DNSKEY":
+	case "CDNSKEY", "DNSKEY":
 		content += fmt.Sprintf(" dnskey_flags=%d dnskey_protocol=%d dnskey_algorithm=%d dnskey_publickey=%s", rc.DnskeyFlags, rc.DnskeyProtocol, rc.DnskeyAlgorithm, rc.DnskeyPublicKey)
 	case "MX":
 		content += fmt.Sprintf(" pref=%d", rc.MxPreference)

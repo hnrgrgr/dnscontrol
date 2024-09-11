@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"strings"
 
 	"github.com/StackExchange/dnscontrol/v4/pkg/txtutil"
@@ -41,6 +42,8 @@ import (
 //	  CF_WORKER_ROUTE
 //	  CLOUDFLAREAPI_SINGLE_REDIRECT
 //	  CLOUDNS_WR
+//	  CDNSKEY
+//	  DNSKEY
 //	  FRAME
 //	  IMPORT_TRANSFORM
 //	  NAMESERVER
@@ -402,6 +405,16 @@ func (rc *RecordConfig) ToRR() dns.RR {
 		rr.(*dns.CAA).Flag = rc.CaaFlag
 		rr.(*dns.CAA).Tag = rc.CaaTag
 		rr.(*dns.CAA).Value = rc.GetTargetField()
+	case dns.TypeCDNSKEY:
+		rr.(*dns.CDNSKEY).Flags = rc.DnskeyFlags
+		rr.(*dns.CDNSKEY).Protocol = rc.DnskeyProtocol
+		rr.(*dns.CDNSKEY).Algorithm = rc.DnskeyAlgorithm
+		rr.(*dns.CDNSKEY).PublicKey = rc.DnskeyPublicKey
+	case dns.TypeCDS:
+		rr.(*dns.CDS).Algorithm = rc.DsAlgorithm
+		rr.(*dns.CDS).DigestType = rc.DsDigestType
+		rr.(*dns.CDS).Digest = rc.DsDigest
+		rr.(*dns.CDS).KeyTag = rc.DsKeyTag
 	case dns.TypeCNAME:
 		rr.(*dns.CNAME).Target = rc.GetTargetField()
 	case dns.TypeDHCID:
@@ -611,7 +624,7 @@ func Downcase(recs []*RecordConfig) {
 		r.Name = strings.ToLower(r.Name)
 		r.NameFQDN = strings.ToLower(r.NameFQDN)
 		switch r.Type { // #rtype_variations
-		case "AKAMAICDN", "ALIAS", "AAAA", "ANAME", "CNAME", "DNAME", "DS", "DNSKEY", "MX", "NS", "NAPTR", "PTR", "SRV", "TLSA":
+		case "AKAMAICDN", "ALIAS", "AAAA", "ANAME", "CDS", "CDNSKEY", "CNAME", "DNAME", "DS", "DNSKEY", "MX", "NS", "NAPTR", "PTR", "SRV", "TLSA":
 			// Target is case insensitive. Downcase it.
 			r.target = strings.ToLower(r.target)
 			// BUGFIX(tlim): isn't ALIAS in the wrong case statement?
@@ -652,4 +665,14 @@ func CanonicalizeTargets(recs []*RecordConfig, origin string) {
 			// TODO: we'd like to panic here, but custom record types complicate things.
 		}
 	}
+}
+
+func (records Records) GetIPs() []net.IP {
+	ips := []net.IP{}
+	for _, rc := range records {
+		if rc.Type == "A" || rc.Type == "AAAA" {
+			ips = append(ips, rc.GetTargetIP())
+		}
+	}
+	return ips
 }

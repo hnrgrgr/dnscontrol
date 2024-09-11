@@ -59,6 +59,7 @@ func validateRecordTypes(rec *models.RecordConfig, domain string, pTypes []strin
 		"AAAA":             true,
 		"ALIAS":            false,
 		"CAA":              true,
+		"CDS":              true,
 		"CNAME":            true,
 		"DHCID":            true,
 		"DNAME":            true,
@@ -227,7 +228,7 @@ func checkTargets(rec *models.RecordConfig, domain string) (errs []error) {
 		}
 	case "SRV":
 		check(checkTarget(target))
-	case "CAA", "DHCID", "DNSKEY", "DS", "HTTPS", "IMPORT_TRANSFORM", "SSHFP", "SVCB", "TLSA", "TXT":
+	case "CAA", "CDS", "DHCID", "DNSKEY", "DS", "HTTPS", "IMPORT_TRANSFORM", "SSHFP", "SVCB", "TLSA", "TXT":
 	default:
 		if rec.Metadata["orig_custom_type"] != "" {
 			// it is a valid custom type. We perform no validation on target
@@ -581,7 +582,7 @@ func checkAutoDNSSEC(dc *models.DomainConfig) (errs []error) {
 	if strings.ToLower(dc.RegistrarName) == "none" {
 		return
 	}
-	if dc.AutoDNSSEC == "on" {
+	if dc.AutoDNSSEC == "on" && dc.RegisterDNSKEY == models.None {
 		for providerName := range dc.DNSProviderNames {
 			if dc.RegistrarName != providerName {
 				errs = append(errs, Warning{fmt.Errorf("AutoDNSSEC is enabled, but DNS provider %s does not match registrar %s", providerName, dc.RegistrarName)})

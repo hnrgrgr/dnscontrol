@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -28,6 +29,7 @@ import (
 	"github.com/StackExchange/dnscontrol/v4/providers"
 	"github.com/go-gandi/go-gandi"
 	"github.com/go-gandi/go-gandi/config"
+	"github.com/go-gandi/go-gandi/domain"
 	"github.com/go-gandi/go-gandi/livedns"
 	"github.com/miekg/dns/dnsutil"
 )
@@ -314,6 +316,54 @@ func (client *gandiv5Provider) GetNameservers(domain string) ([]*models.Nameserv
 	return models.ToNameservers(nameservers)
 }
 
+func listGlueRecords(g *domain.Domain, domain string) (models.GlueRecords, error) {
+	recs, err := g.ListGlueRecords(domain)
+	if err != nil {
+		return nil, err
+	}
+	ret := models.GlueRecords{}
+	for _, r := range recs {
+		ips := []net.IP{}
+		for _, sIp := range r.IPs {
+			ip := net.ParseIP(sIp)
+			if ip == nil || (ip.To4() == nil && ip.To16() == nil) {
+				return nil, fmt.Errorf("invalid IP in glue record: %s", sIp)
+			}
+			ips = append(ips, ip)
+		}
+		ret = append(ret, &models.GlueRecord{
+			Host: r.Name + "." + r.FQDN,
+			IPs:  ips,
+		})
+	}
+	return ret, nil
+}
+
+func listDNSSECKeys(g *domain.Domain, domain string) (models.Dnskeys, error) {
+	recs, err := g.ListDNSSECKeys(domain)
+	if err != nil {
+		return nil, err
+	}
+	ret := models.Dnskeys{}
+	for _, r := range recs {
+		flags := uint16(0)
+		switch r.Type {
+		case "ksk":
+			flags = 257
+		case "zsk":
+			flags = 256
+		}
+		ret = append(ret, models.Dnskey{
+			Tag:       uint16(r.KeyTag),
+			Flags:     flags,
+			Algorithm: uint8(r.Algorithm),
+			PublicKey: r.PublicKey,
+			Original:  r,
+		})
+	}
+	return ret, nil
+}
+
 // GetRegistrarCorrections returns a list of corrections for this registrar.
 func (client *gandiv5Provider) GetRegistrarCorrections(dc *models.DomainConfig) ([]*models.Correction, error) {
 	gd := gandi.NewDomainClient(config.Config{
@@ -335,16 +385,141 @@ func (client *gandiv5Provider) GetRegistrarCorrections(dc *models.DomainConfig) 
 	sort.Strings(desiredNs)
 	desired := strings.Join(desiredNs, ",")
 
+	actualGlue, err := listGlueRecords(gd, dc.Name)
+	if err != nil {
+		return nil, err
+	}
+	glueInstructions, err := diff2.GlueByRecord(actualGlue, dc)
+	if err != nil {
+		return nil, err
+	}
+
+	corrections := []*models.Correction{}
+
+	for _, inst := range glueInstructions {
+		name := strings.TrimSuffix(inst.Key, "."+dc.Name)
+		newIps := []string{}
+		for _, ip := range inst.New {
+			newIps = append(newIps, ip.String())
+		}
+		switch inst.Type {
+		case diff2.REPORT:
+			corrections = append(corrections, &models.Correction{Msg: inst.Msg})
+		case diff2.CREATE:
+			corrections = append(corrections,
+				&models.Correction{
+					Msg: inst.Msg,
+					F: func() error {
+						return gd.CreateGlueRecord(dc.Name,
+							domain.GlueRecordCreateRequest{
+								Name: name,
+								IPs:  newIps,
+							})
+					},
+				})
+		case diff2.CHANGE:
+		case diff2.DELETE:
+		default:
+			panic(fmt.Sprintf("unhandled inst.Type %s", inst.Type))
+		}
+	}
+
 	if existing != desired {
-		return []*models.Correction{
-			{
+		corrections = append(corrections,
+			&models.Correction{
 				Msg: fmt.Sprintf("Change Nameservers from '%s' to '%s'", existing, desired),
 				F: func() (err error) {
 					err = gd.UpdateNameServers(dc.Name, desiredNs)
 					return
 				},
-			},
-		}, nil
+			})
 	}
-	return nil, nil
+
+	for _, inst := range glueInstructions {
+		name := strings.TrimSuffix(inst.Key, "."+dc.Name)
+		newIps := []string{}
+		for _, ip := range inst.New {
+			newIps = append(newIps, ip.String())
+		}
+		switch inst.Type {
+		case diff2.REPORT:
+		case diff2.CREATE:
+		case diff2.CHANGE:
+			corrections = append(corrections,
+				&models.Correction{
+					Msg: inst.Msg,
+					F: func() error {
+						return gd.UpdateGlueRecord(dc.Name, name, newIps)
+					},
+				})
+		case diff2.DELETE:
+			corrections = append(corrections,
+				&models.Correction{
+					Msg: inst.Msg,
+					F: func() error {
+						return gd.DeleteGlueRecord(dc.Name, name)
+					},
+				})
+		default:
+			panic(fmt.Sprintf("unhandled inst.Type %s", inst.Type))
+		}
+	}
+
+	if dc.RegisterDNSKEY != models.None {
+		actualDnskeys, err := listDNSSECKeys(gd, dc.Name)
+		if err != nil {
+			return nil, err
+		}
+		dsInstructions, _ := diff2.ByDnskey(actualDnskeys, dc)
+		for _, inst := range dsInstructions {
+			switch inst.Type {
+			case diff2.REPORT:
+				corrections = append(corrections, &models.Correction{Msg: inst.Msg})
+			case diff2.CREATE:
+				algorithm := int(inst.Key.Algorithm)
+				publickey := inst.Key.PublicKey
+				keytype := "none"
+				switch inst.Key.Flags {
+				case 256:
+					keytype = "zsk"
+				case 257:
+					keytype = "ksk"
+				}
+				corrections = append(corrections,
+					&models.Correction{
+						Msg: inst.Msg,
+						F: func() error {
+							return gd.CreateDNSSECKey(dc.Name, domain.DNSSECKeyCreateRequest{
+								Algorithm: algorithm,
+								Type:      keytype,
+								PublicKey: publickey,
+							})
+						},
+					})
+			case diff2.DELETE:
+				// Ignored
+			default:
+				panic(fmt.Sprintf("unhandled inst.Type %s", inst.Type))
+			}
+		}
+		for _, inst := range dsInstructions {
+			switch inst.Type {
+			case diff2.CREATE:
+				//Ignored
+			case diff2.DELETE:
+				id := inst.Key.Original.(domain.DNSSECKey).ID
+				corrections = append(corrections,
+					&models.Correction{
+						Msg: inst.Msg,
+						F: func() error {
+							return gd.DeleteDNSSECKey(dc.Name, strconv.FormatInt(int64(id), 10))
+						},
+					})
+			default:
+				panic(fmt.Sprintf("unhandled inst.Type %s", inst.Type))
+			}
+		}
+	}
+
+	return corrections, nil
 }

@@ -166,9 +166,9 @@ func (rc *RecordConfig) PopulateFromString(rtype, contents, origin string) error
 		return rc.SetTarget(contents)
 	case "CAA":
 		return rc.SetTargetCAAString(contents)
-	case "DS":
+	case "CDS", "DS":
 		return rc.SetTargetDSString(contents)
-	case "DNSKEY":
+	case "CDNSKEY", "DNSKEY":
 		return rc.SetTargetDNSKEYString(contents)
 	case "DHCID":
 		return rc.SetTarget(contents)
